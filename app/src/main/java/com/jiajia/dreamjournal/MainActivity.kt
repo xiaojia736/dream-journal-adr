@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Base64
+import android.util.Log
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -27,7 +28,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import androidx.core.view.WindowCompat
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -58,10 +58,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // 设置沉浸式，让布局延伸到状态栏区域
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-
         installSplashScreen()
         setContentView(R.layout.activity_main)
 
@@ -109,20 +105,45 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
-            if (url.startsWith("data:")) {
-                saveDataUrlToDownloads(this, url, contentDisposition, mimetype)
-            } else {
-                val request = DownloadManager.Request(url.toUri()).apply {
-                    setMimeType(mimetype)
-                    addRequestHeader("User-Agent", userAgent)
-                    setDescription("正在下载文件...")
-                    setTitle(URLUtil.guessFileName(url, contentDisposition, mimetype))
-                    setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimetype))
+            Log.d("ExportDebug", "Download requested for URL: $url")
+            when {
+                url.startsWith("data:") -> {
+                    saveDataUrlToDownloads(this, url, contentDisposition, mimetype)
                 }
-                val downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                downloadManager.enqueue(request)
-                Toast.makeText(applicationContext, "下载已开始...", Toast.LENGTH_SHORT).show()
+                url.startsWith("blob:") -> {
+                    val script = """
+                        (async function() {
+                            const response = await fetch('$url');
+                            const blob = await response.blob();
+                            const reader = new FileReader();
+                            return await new Promise(resolve => {
+                                reader.onload = () => resolve(reader.result);
+                                reader.readAsDataURL(blob);
+                            });
+                        })();
+                    """
+                    webView.evaluateJavascript(script) { result ->
+                        Log.d("ExportDebug", "Blob converted to data URL: $result")
+                        if (result != null && result != "null") {
+                            saveDataUrlToDownloads(this, result.removeSurrounding("\""), contentDisposition, mimetype)
+                        } else {
+                            Toast.makeText(this, "导出失败: 无法读取Blob数据", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+                else -> {
+                    val request = DownloadManager.Request(url.toUri()).apply {
+                        setMimeType(mimetype)
+                        addRequestHeader("User-Agent", userAgent)
+                        setDescription("正在下载文件...")
+                        setTitle(URLUtil.guessFileName(url, contentDisposition, mimetype))
+                        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                        setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimetype))
+                    }
+                    val downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                    downloadManager.enqueue(request)
+                    Toast.makeText(applicationContext, "下载已开始...", Toast.LENGTH_SHORT).show()
+                }
             }
         }
 
@@ -148,8 +169,15 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(context, "正在导出...", Toast.LENGTH_SHORT).show()
         try {
             val base64Data = url.substringAfter("base64,")
+            Log.d("ExportDebug", "Base64 data payload: $base64Data")
             val fileData = Base64.decode(base64Data, Base64.DEFAULT)
             
+            if(fileData.isEmpty()) {
+                Log.e("ExportDebug", "Decoded file data is empty. Aborting save.")
+                Toast.makeText(context, "导出失败: 数据为空。", Toast.LENGTH_LONG).show()
+                return
+            }
+
             val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
             val defaultFileName = "dream_diary_backup_${sdf.format(Date())}.json"
             val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType) ?: defaultFileName
