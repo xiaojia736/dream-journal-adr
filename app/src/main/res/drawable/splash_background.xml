@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 1. 背景层：设置纯色背景 -->
-    <item android:drawable="@color/splash_background_purple" />
+    <!-- 1. 背景层：将背景设置为白色 -->
+    <item android:drawable="@color/white" />
 
     <!-- 2. Logo 层：将 logo.png 居中显示 -->
     <item android:gravity="center">

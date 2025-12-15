@@ -27,6 +27,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.view.WindowCompat
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -57,6 +58,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 设置沉浸式，让布局延伸到状态栏区域
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+
         installSplashScreen()
         setContentView(R.layout.activity_main)
 
@@ -107,7 +112,6 @@ class MainActivity : AppCompatActivity() {
             if (url.startsWith("data:")) {
                 saveDataUrlToDownloads(this, url, contentDisposition, mimetype)
             } else {
-                // Handle standard HTTP downloads
                 val request = DownloadManager.Request(url.toUri()).apply {
                     setMimeType(mimetype)
                     addRequestHeader("User-Agent", userAgent)
@@ -162,10 +166,9 @@ class MainActivity : AppCompatActivity() {
 
                 resolver.openOutputStream(uri).use { it?.write(fileData) }
             } else {
-                // Triple-check for older versions
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                     Toast.makeText(context, "导出失败：缺少存储权限。", Toast.LENGTH_LONG).show()
-                    requestStoragePermissionsIfNeeded() 
+                    requestStoragePermissionsIfNeeded()
                     return
                 }
                 if (Environment.getExternalStorageState() != Environment.MEDIA_MOUNTED) {
