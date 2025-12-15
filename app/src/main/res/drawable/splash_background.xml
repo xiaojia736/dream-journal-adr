@@ -5,7 +5,7 @@
     <item android:drawable="@color/white" />
 
     <!-- 2. Logo 层：将 logo.png 居中显示 -->
-    <item android:gravity="center">
+    <item>
         <bitmap
             android:gravity="center"
             android:src="@drawable/logo" />

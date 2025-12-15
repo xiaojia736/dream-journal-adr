@@ -15,6 +15,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
+import android.webkit.ConsoleMessage
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -28,6 +29,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -58,8 +62,15 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 1. 设置沉浸式，让布局延伸到状态栏和导航栏区域
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+
         installSplashScreen()
         setContentView(R.layout.activity_main)
+
+        // 2. 隐藏状态栏和导航栏
+        hideSystemBars()
 
         setupBackPressHandler()
         requestStoragePermissionsIfNeeded()
@@ -67,6 +78,14 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webview)
         setupWebView()
         webView.loadUrl("https://xiaojia736.github.io/dream-journal/")
+    }
+
+    private fun hideSystemBars() {
+        val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
+        // 隐藏状态栏和导航栏
+        windowInsetsController.hide(WindowInsetsCompat.Type.systemBars())
+        // 设置行为：当用户从屏幕边缘滑动时，系统栏会短暂地出现
+        windowInsetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
 
     private fun requestStoragePermissionsIfNeeded() {
@@ -160,6 +179,13 @@ class MainActivity : AppCompatActivity() {
                     type = "application/json"
                 }
                 fileChooserLauncher.launch(intent)
+                return true
+            }
+
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                if (consoleMessage != null) {
+                    Log.d("WebViewConsole", "${consoleMessage.message()} -- From line ${consoleMessage.lineNumber()} of ${consoleMessage.sourceId()}")
+                }
                 return true
             }
         }
