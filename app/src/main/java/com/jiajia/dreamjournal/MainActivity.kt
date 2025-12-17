@@ -15,6 +15,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
+import android.view.WindowManager
 import android.webkit.ConsoleMessage
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
@@ -29,6 +30,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -43,6 +45,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var lastSafeAreaTopDp: Float = 0f
 
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
@@ -62,6 +65,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 0. 设置刘海屏适配模式，允许内容延伸到刘海区域
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val params = window.attributes
+            params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            window.attributes = params
+        }
 
         // 1. 设置沉浸式，让布局延伸到状态栏和导航栏区域
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -113,7 +123,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupWebView() {
-        webView.webViewClient = WebViewClient()
+        webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                super.onPageFinished(view, url)
+                injectSafeArea(lastSafeAreaTopDp)
+            }
+        }
 
         webView.settings.apply {
             javaScriptEnabled = true
@@ -121,6 +136,31 @@ class MainActivity : AppCompatActivity() {
             allowFileAccess = true
             allowContentAccess = true
             cacheMode = WebSettings.LOAD_NO_CACHE
+        }
+
+        // 监听 WindowInsets 变化，获取刘海屏高度
+        ViewCompat.setOnApplyWindowInsetsListener(webView) { _, windowInsets ->
+            val displayCutout = windowInsets.displayCutout
+            val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
+
+            // 优先使用 displayCutout 的 safeInsetTop，如果没有则使用 systemBars 的 top
+            // 注意：当隐藏状态栏时，systemBars().top 可能还是会有值（表示状态栏原本的高度），
+            // 但我们的目的是避开物理遮挡（刘海），所以主要关注 displayCutout。
+            // 如果没有刘海，且隐藏了状态栏，我们可能希望 top 为 0。
+            // 但如果用户希望即使无刘海也保留状态栏高度作为 padding（虽然状态栏隐藏了），可以使用 insets.top。
+            // 这里假设主要为了避让刘海。
+            val topPx = displayCutout?.safeInsetTop ?: 0
+
+            val density = resources.displayMetrics.density
+            val topDp = topPx / density
+
+            if (topDp != lastSafeAreaTopDp) {
+                lastSafeAreaTopDp = topDp
+                injectSafeArea(topDp)
+            }
+
+            // 返回 windowInsets 以允许 WebView 内部继续处理（例如软键盘适配）
+            windowInsets
         }
 
         webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
@@ -189,6 +229,13 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
         }
+    }
+
+    private fun injectSafeArea(topDp: Float) {
+        // 将安全区域高度注入到 CSS 变量 --safe-area-top 中
+        // 网页端可以使用 var(--safe-area-top) 来设置 padding-top
+        val js = "document.documentElement.style.setProperty('--safe-area-top', '${topDp}px');"
+        webView.evaluateJavascript(js, null)
     }
 
     private fun saveDataUrlToDownloads(context: Context, url: String, contentDisposition: String?, mimeType: String?) {
