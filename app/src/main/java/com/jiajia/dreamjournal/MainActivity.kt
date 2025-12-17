@@ -1,6 +1,7 @@
 package com.jiajia.dreamjournal
 
 import android.Manifest
+import android.animation.ObjectAnimator
 import android.app.Activity
 import android.app.DownloadManager
 import android.content.ContentValues
@@ -27,13 +28,16 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.animation.doOnEnd
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
+import androidx.core.splashscreen.SplashScreen
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.interpolator.view.animation.FastOutSlowInInterpolator
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -52,6 +56,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var lastSafeAreaTopDp: Float = 0f
+    private var isPageLoaded = false
 
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
@@ -82,7 +87,34 @@ class MainActivity : AppCompatActivity() {
         // 1. 设置沉浸式，让布局延伸到状态栏和导航栏区域
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
-        installSplashScreen()
+        val splashScreen = installSplashScreen()
+        // 保持启动画面直到网页加载完成
+        splashScreen.setKeepOnScreenCondition {
+            !isPageLoaded
+        }
+        // 自定义 Splash 退出动画
+        splashScreen.setOnExitAnimationListener { splashScreenViewProvider ->
+            val splashScreenView = splashScreenViewProvider.view
+
+            // 配合淡出效果
+            val alpha = ObjectAnimator.ofFloat(
+                splashScreenView,
+                android.view.View.ALPHA,
+                1f,
+                0f
+            )
+            alpha.interpolator = FastOutSlowInInterpolator()
+            alpha.duration = 400L
+
+            // 动画结束后移除 SplashView
+            val animatorSet = android.animation.AnimatorSet()
+            animatorSet.playTogether(alpha)
+            animatorSet.doOnEnd {
+                splashScreenViewProvider.remove()
+            }
+            animatorSet.start()
+        }
+        
         setContentView(R.layout.activity_main)
 
         // 2. 隐藏状态栏和导航栏
@@ -133,6 +165,17 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 injectSafeArea(lastSafeAreaTopDp)
+                
+                // 使用 postVisualStateCallback 确保 WebView 已经完成了当前的绘制
+                view?.postVisualStateCallback(123, object : WebView.VisualStateCallback() {
+                    override fun onComplete(requestId: Long) {
+                        // 这样可以最大程度避免 SPA (单页应用) 刚加载完 HTML 骨架时的白屏
+                        view.postDelayed({
+                            isPageLoaded = true
+
+                        }, 0)
+                    }
+                })
             }
         }
 
