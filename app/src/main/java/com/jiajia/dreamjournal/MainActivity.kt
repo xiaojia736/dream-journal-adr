@@ -43,6 +43,12 @@ import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        // 静态变量，生命周期伴随 App 进程。
+        // true 表示这是 App 进程启动后的第一次加载。
+        private var isAppProcessFirstLoad = true
+    }
+
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var lastSafeAreaTopDp: Float = 0f
@@ -135,7 +141,16 @@ class MainActivity : AppCompatActivity() {
             domStorageEnabled = true
             allowFileAccess = true
             allowContentAccess = true
-            cacheMode = WebSettings.LOAD_NO_CACHE
+            
+            if (isAppProcessFirstLoad) {
+                // App 进程首次启动：强制不使用缓存，从网络拉取最新
+                cacheMode = WebSettings.LOAD_NO_CACHE
+                // 标记已处理，后续 Activity 重建（如旋转屏幕、深色模式切换）将使用缓存
+                isAppProcessFirstLoad = false
+            } else {
+                // 进程生命周期内的后续加载：使用默认缓存策略（遵循 HTTP 头或使用已缓存资源）
+                cacheMode = WebSettings.LOAD_DEFAULT
+            }
         }
 
         // 监听 WindowInsets 变化，获取刘海屏高度
