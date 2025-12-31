@@ -58,6 +58,9 @@ class MainActivity : AppCompatActivity() {
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var lastSafeAreaTopDp: Float = 0f
     private var isPageLoaded = false
+    
+    // 用于保存导出的文件内容
+    private var pendingExportContent: String? = null
 
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
@@ -73,6 +76,21 @@ class MainActivity : AppCompatActivity() {
         if (!allGranted) {
             Toast.makeText(this, "存储权限被拒绝，文件无法保存。", Toast.LENGTH_LONG).show()
         }
+    }
+
+    // 创建文件导出启动器 (SAF)
+    private val createFileLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            result.data?.data?.let { uri ->
+                pendingExportContent?.let { content ->
+                    writeContentToUri(uri, content)
+                }
+            }
+        } else {
+             Toast.makeText(this, "导出已取消", Toast.LENGTH_SHORT).show()
+        }
+        // 清理暂存内容
+        pendingExportContent = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -324,63 +342,33 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * 处理来自 JS Interface 的纯 JSON 字符串导出
+     * 修改为：弹出系统文件选择器让用户选择保存位置
      */
     fun saveJsonContentToDownloads(jsonContent: String) {
         runOnUiThread {
-            Toast.makeText(this, "正在导出...", Toast.LENGTH_SHORT).show()
-        }
-        try {
-            val fileData = jsonContent.toByteArray(Charsets.UTF_8)
-            
+            pendingExportContent = jsonContent
             val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
             val fileName = "dream_journal_backup_${sdf.format(Date())}.json"
-            val mimeType = "application/json"
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                }
-                val resolver = contentResolver
-                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
-                    ?: throw IOException("Failed to create new MediaStore record.")
-
-                resolver.openOutputStream(uri).use { it?.write(fileData) }
-            } else {
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                    runOnUiThread {
-                        Toast.makeText(this, "导出失败：缺少存储权限。", Toast.LENGTH_LONG).show()
-                        requestStoragePermissionsIfNeeded()
-                    }
-                    return
-                }
-                if (Environment.getExternalStorageState() != Environment.MEDIA_MOUNTED) {
-                    runOnUiThread {
-                        Toast.makeText(this, "导出失败：外部存储不可用。", Toast.LENGTH_SHORT).show()
-                    }
-                    return
-                }
-
-                @Suppress("DEPRECATION")
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                if (!downloadsDir.exists() && !downloadsDir.mkdirs()) {
-                    throw IOException("Failed to create download directory.")
-                }
-                
-                val file = File(downloadsDir, fileName)
-                FileOutputStream(file).use { it.write(fileData) }
-                MediaScannerConnection.scanFile(this, arrayOf(file.toString()), null, null)
+            
+            // 使用 Storage Access Framework (SAF) 启动文件创建意图
+            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "application/json"
+                putExtra(Intent.EXTRA_TITLE, fileName)
             }
+            createFileLauncher.launch(intent)
+        }
+    }
 
-            runOnUiThread {
-                Toast.makeText(this, "导出成功，请在下载文件夹查看: $fileName", Toast.LENGTH_LONG).show()
+    private fun writeContentToUri(uri: Uri, content: String) {
+        try {
+            contentResolver.openOutputStream(uri)?.use { outputStream ->
+                outputStream.write(content.toByteArray(Charsets.UTF_8))
             }
+            Toast.makeText(this, "导出成功", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             e.printStackTrace()
-            runOnUiThread {
-                Toast.makeText(this, "导出失败: ${e.message}", Toast.LENGTH_LONG).show()
-            }
+            Toast.makeText(this, "导出失败: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
