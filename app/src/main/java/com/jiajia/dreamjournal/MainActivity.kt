@@ -18,6 +18,7 @@ import android.util.Base64
 import android.util.Log
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
+import android.webkit.JavascriptInterface
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -161,6 +162,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupWebView() {
+        // 注册 JS 接口
+        webView.addJavascriptInterface(WebAppInterface(this), "AndroidExport")
+
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
@@ -230,21 +234,37 @@ class MainActivity : AppCompatActivity() {
                 url.startsWith("blob:") -> {
                     val script = """
                         (async function() {
-                            const response = await fetch('$url');
-                            const blob = await response.blob();
-                            const reader = new FileReader();
-                            return await new Promise(resolve => {
-                                reader.onload = () => resolve(reader.result);
-                                reader.readAsDataURL(blob);
-                            });
+                            try {
+                                const response = await fetch('$url');
+                                if (!response.ok) throw new Error('Fetch failed: ' + response.status);
+                                const blob = await response.blob();
+                                const reader = new FileReader();
+                                return await new Promise((resolve, reject) => {
+                                    reader.onload = () => resolve(reader.result);
+                                    reader.onerror = () => reject('Reader error');
+                                    reader.readAsDataURL(blob);
+                                });
+                            } catch (e) {
+                                console.error('Blob export error:', e);
+                                return 'error: ' + e.message;
+                            }
                         })();
                     """
                     webView.evaluateJavascript(script) { result ->
-                        Log.d("ExportDebug", "Blob converted to data URL: $result")
-                        if (result != null && result != "null") {
-                            saveDataUrlToDownloads(this, result.removeSurrounding("\""), contentDisposition, mimetype)
+                        Log.d("ExportDebug", "Blob converted result: $result")
+                        
+                        if (result != null && result != "null" && !result.contains("\"error:")) {
+                            // 去掉首尾的双引号
+                            val cleanResult = result.removeSurrounding("\"")
+                            saveDataUrlToDownloads(this, cleanResult, contentDisposition, mimetype)
+                            
+                            // 关键：通知 Web 端释放资源
+                            webView.post {
+                                webView.evaluateJavascript("if(window.onExportComplete) window.onExportComplete();", null)
+                            }
                         } else {
-                            Toast.makeText(this, "导出失败: 无法读取Blob数据", Toast.LENGTH_SHORT).show()
+                            val errorMsg = if (result != null) result else "Unknown error"
+                            Toast.makeText(this, "导出失败: $errorMsg", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
@@ -297,41 +317,48 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveDataUrlToDownloads(context: Context, url: String, contentDisposition: String?, mimeType: String?) {
-        Toast.makeText(context, "正在导出...", Toast.LENGTH_SHORT).show()
-        try {
-            val base64Data = url.substringAfter("base64,")
-            Log.d("ExportDebug", "Base64 data payload: $base64Data")
-            val fileData = Base64.decode(base64Data, Base64.DEFAULT)
-            
-            if(fileData.isEmpty()) {
-                Log.e("ExportDebug", "Decoded file data is empty. Aborting save.")
-                Toast.makeText(context, "导出失败: 数据为空。", Toast.LENGTH_LONG).show()
-                return
-            }
+        // ... (保持不变，或根据需要重构供 Interface 调用)
+        // 为了复用代码，我们可以把保存逻辑提取出来
+        // 这里暂时不改动它，而是新增一个专门处理 JSON 字符串的方法
+    }
 
+    /**
+     * 处理来自 JS Interface 的纯 JSON 字符串导出
+     */
+    fun saveJsonContentToDownloads(jsonContent: String) {
+        runOnUiThread {
+            Toast.makeText(this, "正在导出...", Toast.LENGTH_SHORT).show()
+        }
+        try {
+            val fileData = jsonContent.toByteArray(Charsets.UTF_8)
+            
             val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
-            val defaultFileName = "dream_diary_backup_${sdf.format(Date())}.json"
-            val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType) ?: defaultFileName
+            val fileName = "dream_journal_backup_${sdf.format(Date())}.json"
+            val mimeType = "application/json"
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val contentValues = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType ?: "application/json")
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                     put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                 }
-                val resolver = context.contentResolver
+                val resolver = contentResolver
                 val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
                     ?: throw IOException("Failed to create new MediaStore record.")
 
                 resolver.openOutputStream(uri).use { it?.write(fileData) }
             } else {
-                if (ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                    Toast.makeText(context, "导出失败：缺少存储权限。", Toast.LENGTH_LONG).show()
-                    requestStoragePermissionsIfNeeded()
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                    runOnUiThread {
+                        Toast.makeText(this, "导出失败：缺少存储权限。", Toast.LENGTH_LONG).show()
+                        requestStoragePermissionsIfNeeded()
+                    }
                     return
                 }
                 if (Environment.getExternalStorageState() != Environment.MEDIA_MOUNTED) {
-                    Toast.makeText(context, "导出失败：外部存储不可用。", Toast.LENGTH_SHORT).show()
+                    runOnUiThread {
+                        Toast.makeText(this, "导出失败：外部存储不可用。", Toast.LENGTH_SHORT).show()
+                    }
                     return
                 }
 
@@ -343,13 +370,26 @@ class MainActivity : AppCompatActivity() {
                 
                 val file = File(downloadsDir, fileName)
                 FileOutputStream(file).use { it.write(fileData) }
-                MediaScannerConnection.scanFile(context, arrayOf(file.toString()), null, null)
+                MediaScannerConnection.scanFile(this, arrayOf(file.toString()), null, null)
             }
 
-            Toast.makeText(context, "导出成功，请在下载文件夹查看", Toast.LENGTH_LONG).show()
+            runOnUiThread {
+                Toast.makeText(this, "导出成功，请在下载文件夹查看: $fileName", Toast.LENGTH_LONG).show()
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-            Toast.makeText(context, "导出失败: ${e.message}", Toast.LENGTH_LONG).show()
+            runOnUiThread {
+                Toast.makeText(this, "导出失败: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    // 内部类：JS 接口
+    private inner class WebAppInterface(private val context: Context) {
+        @JavascriptInterface
+        fun exportData(jsonContent: String) {
+            Log.d("AndroidExport", "Received data from JS: length=${jsonContent.length}")
+            saveJsonContentToDownloads(jsonContent)
         }
     }
 }
